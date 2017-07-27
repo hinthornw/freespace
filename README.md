@@ -16,4 +16,22 @@ These observations lead me to pose the question in a slightly different light. I
     The last proposal to me seems interesting but could be difficult ot implmement and train in a limited time.
 
 
+Comments on "Novel" CNN architectures:
+
+Leapnets:  Perhaps have some potential use, but are VERY slow... They will be even slower if I do the necessary modifications and use cat instead of add to allow for more clear flow of information. (a la DenseNet) That being said, we could come to a compromise and 
+
+DenseShuffle:
+
+I compare two styles - One with a straight up method, one with a fusion from stem at midway and a single smoother.
+
+A) Round 0 : 0.676
+
+B) Round 0: 0.653
+
+PERHAPS too early to call, but it seems that this raw data hurts the predicitons significantly because it hasn't been sufficiently smoothed out.
+
+
+
+
+
 
