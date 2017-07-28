@@ -31,6 +31,14 @@ B) Round 0: 0.653
 PERHAPS too early to call, but it seems that this raw data hurts the predicitons significantly because it hasn't been sufficiently smoothed out.
 
 
+Terrible Tiramisu: in which I compare RNN's added at the BEGINNING of block 5 (of 9) for a Tiramisu net.
+
+1) CNN (W2TL): R0 = 
+2) ADD (W2BL): R0 = 
+3) ADDMULT (W1BR): R0 = 
+4) MULTADD (W2BR): R0 = 
+5) MULTMULT(W1BL): R0 = 
+
 
 
 
