@@ -33,13 +33,13 @@ PERHAPS too early to call, but it seems that this raw data hurts the predicitons
 
 Terrible Tiramisu: in which I compare RNN's added at the BEGINNING of block 5 (of 9) for a Tiramisu net.
 
-1) CNN (W2TL): R0 = 
-2) ADD (W2BL): R0 = 
-3) ADDMULT (W1BR): R0 = 
-4) MULTADD (W2BR): R0 = 
-5) MULTMULT(W1BL): R0 = 
-
-
+1) CNN (W2TL): R0 = 0.5285: 0.47
+2) ADD (W2BL): R0 = 0.5631: 
+3) ADDMULT (W1BR): R0 = 0.5100 : 0.574
+4) MULTADD (W2BR): R0 = 0.5422  : 0.59
+5) MULTMULT(W1BL): R0 = **0.5796** : **0.6670**
+6) SUBSUB: R0 = 0.523: 
+7) Sub Add: 0.36455
 
 
 
