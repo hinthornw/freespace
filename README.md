@@ -41,5 +41,13 @@ Terrible Tiramisu: in which I compare RNN's added at the BEGINNING of block 5 (o
 6) SUBSUB: R0 = 0.523: 
 7) Sub Add: 0.36455
 
-
+| Description:  | Experiments placing Convolutional Elman units before block 5 in a Tiramisu architecture (where block 5 has hxw of 28x28). Seq length of 5 |  |  |  |  |  |  |
+|---------------|-------------------------------------------------------------------------------------------------------------------------------------------|-----------------|------------------|-------|-------------------|------------------------|--------------------------------------------|
+| Base model | Inputs | Rel. Inside f | Rel outside f | Epoch | Road IOU Training | PR Road IOU Validation | Train/val diff (surrogate for overfitting) |
+| Tiramisu40 | x | None (CNN) | None | 14 | 0.912635 | 0.753171305 | 0.159463695 |
+| Tiramisu40 | x and h_t-1 | Additive | Additive | 20 | 0.79777 | 0.73688159 | 0.06088841 |
+| Tiramisu40 | x and h_t-1 | Additive | Multiplicative | 12 | 0.71174 | 0.6380231 | 0.0737169 |
+| Tiramisu40 | x and h_t-1 | Additive | x' - f(x',h_t-1) | 3 | 0.8656 | 0.776471138 | 0.089128862 |
+| Tiramisu40 | x and h_t-1 | Mutltiplicative | Multiplicative | 20 | 0.7 | 0.7227732 | -0.0227732 |
+| Tiramisu40 | x and h_t-1 | Multiplicative | Additive | 20 | 0.87519 | 0.772995 | 0.102195 |
 
