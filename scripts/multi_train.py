@@ -20,23 +20,23 @@ import torchvision.datasets as datasets
 import numpy as np
 import cv2
 from losses import *
-from CrossEntropy2d import CrossEntropy2d
-#from xentrpy2d import CrossEntropy2d 
+#from CrossEntropy2d import CrossEntropy2d
+from xentrpy2d import CrossEntropy2d 
 from res18 import *
 from res50_dilated import *
 from res50_recurrent import *
 from fetch_model import getModelParams
-print_freq = 20#0
-calc_freq = 5
-batch_size = 1#15 #1
+print_freq = 200
+calc_freq = 40 
+batch_size = 1#15
 workers = 8
-epochs = 40 
+epochs = 50 
 deviceids = [4]
 base_lr = 1e-2 
 gradient_clip = 1
-start_epoch = 11
-sel_type = ("set", 5)
-sel_type_val = ("full", 50)
+start_epoch = 0
+sel_type = ("set", 10)
+sel_type_val = ("set", 5)
 #hard_boost = True
 modelname = ''
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -48,10 +48,12 @@ parser.add_argument('--dims', '-d', action="store", default=448, type=int)
 parser.add_argument('--labels', '-l', action='store', default=2, type=int)
 parser.add_argument('--which', '-w', action='store', default='kitti', type=str)
 parser.add_argument('--valfirst', '-v', action='store', default=0, type=int)
+parser.add_argument('--From', '-f', action='store', default=0, type=int)
 num_labels = 2
-accum_batch = 15 #10
+accum_batch = 30 #15 #10
 save_validation = True 
-save_training = True #False #True 
+min_save = -2 
+save_training = True 
 val_first = False 
 #val_first = True 
 
@@ -59,6 +61,7 @@ dims = 448
 dataset = 'mapcar'
 def main():
     global start_epoch, args, save_name, best_name, num_labels, modelname, deviceids, val_first, dims, dataset
+
     args = parser.parse_args()
     bestIOU = np.zeros(num_labels, dtype=np.float32)
     best_prec1 = 100000
@@ -69,6 +72,8 @@ def main():
         val_first = True
     else:
         val_first = False
+    print "Training from epoch {}.".format(args.From)
+    start_epoch = args.From
     gpus_temp = []
     for i in range(len(gpus_)):
         if len(gpus_[i])>0:
@@ -86,17 +91,15 @@ def main():
     sequence = int(args.sequence)
     sel_type = ("set", sequence)
     print "Training with sequence types: {}".format(sel_type)
-#    basemodel = res18.resnetxelu18(True)
     basemodel, basefile, save_name, best_name, train_style = getModelParams(args, deviceids)
-#    basemodel = torch.nn.DataParallel(basemodel, device_ids=deviceids).cuda(deviceids[0])
     
     criterion = CrossEntropy2d
     criterion2 = nn.SmoothL1Loss().cuda(deviceids[0])
 
     model = basemodel
     optimizer = torch.optim.SGD(model.parameters(), lr=base_lr,
-                                momentum=0.95,
-                                weight_decay=0.0001)
+                                momentum=0.9,
+                                weight_decay=0.00001)
 
 
 
@@ -139,7 +142,7 @@ def main():
         # remember best prec@1 and save checkpoint
         for j in range(len(IOU)):
             print("Label {}:\n\tIOU:\t{}\n\tPrecision:\t{}\n\tRecall:"
-            "\t{}\n\tDiff from BTD:\t{}").format(j, IOU[j], PREC[j], REC[j], bestIOU[1] - IOU[1])
+            "\t{}\n\tDiff from BTD:\t{}").format(j, IOU[j], PREC[j], REC[j], bestIOU[j] - IOU[j])
 
 
     print 'start training...'
@@ -178,20 +181,20 @@ def train(train_loader, model, criterion, criterion2, optimizer, train_style, ep
     global dims
     seq_time = AverageMeter()
     data_time = AverageMeter()
-    forward_time = AverageWindow(init=0.01)
-    losses = AverageMeter()
-    LOSS1 = AverageWindow(init=7000.0)
-    LOSS2A = AverageWindow(init=18000.0)
-    LOSS2B = AverageWindow(init=8800.0)
-    LOSS3 = AverageWindow(init=43000.0)
-    LOSSP = AverageWindow(init=83.0)
+    forward_time = AverageWindow(length=(print_freq//calc_freq),init=0.01)
+    losses = AverageWindow(length=(print_freq//calc_freq), init=3000)
+    LOSS1 = AverageWindow(length=(print_freq//calc_freq), init=7000.0)
     batch_time = AverageMeter()
     IOUROAD = AverageMeter()
+    I = AverageMeter()
+    U = AverageMeter()
+    IOU = AverageWindow(length=(print_freq//calc_freq), init=0.5)
+    PREC = AverageWindow(length=(print_freq//calc_freq), init=0.5)
+    REC = AverageWindow(length=(print_freq//calc_freq), init=0.5)
     torch.cuda.device(deviceids)
     model.train()
 
-    l1 = 1.0
-    
+    l1 = 1.0 
     l2 = 0.15
     l3 = 0.15
     lp = 0.2
@@ -202,18 +205,17 @@ def train(train_loader, model, criterion, criterion2, optimizer, train_style, ep
     end = time.time()
     count = 0
     accum = 0
-    IOU = np.zeros(num_labels, dtype=np.float32)
-    REC = np.zeros(num_labels, dtype=np.float32)
-    PREC = np.zeros(num_labels, dtype=np.float32)
     print "Training an {} model".format(train_style)
     alpha = 2.0
-    for j in range(batch_size):
+    for k in range(batch_size):
+        #for i, (imgnames, targnames) in enumerate(train_loader):
         for i, (imgnames, targnames, scale, hval, wval, reflect) in enumerate(train_loader):
             h, out2 = None, None
-            if train_style == 'rnn' or train_style == 'rnnDual':
-                h = model.module.init_hidden().cuda(deviceids[0], async=True)
+            h = model.module.init_hidden().cuda(deviceids[0], async=True)
+
             for (img, target, j) in zip(imgnames, targnames, range(len(targnames))): 
                 #print "Image {} of length {}".format(j, len(targnames))
+                #input, target, targetp = train_loader.dataset.preprocessImage(img, target, 0)
                 input, target, targetp = train_loader.dataset.preprocessImage(img, target, 0, (scale, hval, wval, reflect))
                 input = input.expand(1, 1, dims, dims).contiguous()
                 data_time.update(time.time() - end)
@@ -221,78 +223,57 @@ def train(train_loader, model, criterion, criterion2, optimizer, train_style, ep
                 target_var = Variable(target.cuda(deviceids[0], async=True))
                 target_p = Variable(targetp.cuda(deviceids[0], async=True))
                 out = None
-                if train_style == 'rnn':
+                if train_style == 'kalman':
                     startTime = time.time()
+                    
+#                    print "Outside {} {}: {}".format(k, j, h.max())
+                    #out, h, outparam = model(input_var, h, j) #input hidden layer            
                     out, h = model(input_var, h, j) #input hidden layer            
+
+                    #print "Hidden size: {}".format(h.size())
                     forward_time.update(time.time() - startTime)
                     h = Variable(h.data) # Prevent BPTT from aggregating over multiple iterations
-                    #NOTE: BPTT implementation mayb e buggy...
-                elif train_style == 'iid':
-                    startTime = time.time()
-                    out = model(input_var)
-                    forward_time.update(time.time() - startTime)
-                    #printStats(out)
-#                    print "Predicts:\n{}".format(out.data.max(1))
                     accum += 1
-                elif train_style == 'rnnDual':
-                    if j > 0:  # Train to predict the NEXT fram
-                        if j == 1:
-                            iou, prec, rec = jaccard(out2, target_var)
-                            #print "Round {}:{}\tiou: {}\tprec: {}\trec: {}".format(i, j, 
-                            #        iou[1], prec[1], rec[1])
-                            loss2 = criterion(out2, target_var) 
-                            loss2 = l2 * loss2 *LOSS1.avg / LOSS2A.avg  # half the strength 
-                            LOSS2A.update(loss2.data[0])
-                            loss2.backward(retain_variables=True)
-                        else:
-                            loss2 = criterion(out2, target_var) 
-                        #    loss2 = loss2 / ((float(len(targnames))-1.0)* alpha)  # half the strength
-                            loss2 = l2 * loss2 * LOSS1.avg / LOSS2B.avg / (float(len(targnames)) - 1.0)
-                            LOSS2B.update(loss2.data[0])
-                            loss2.backward(retain_variables=True)
-                        #alpha = alpha - 0.001*(alpha-0.5*(loss1.data[0]/loss2.data[0]))
-                    startTime = time.time()
-                    out, out2, out3, outp, h = model(input_var, h, j)
-                    forward_time.update(time.time() - startTime)
-                    loss3 = criterion(out3, target_var)
-#                    loss3 = loss3/float(len(targnames))
-                    loss3 = l3 * loss3 * LOSS1.avg / LOSS3.avg / float(len(targnames))
-                    LOSS3.update(loss3.data[0])
-                    loss3.backward(retain_variables=True)
-                    lossp = criterion2(outp, target_p)
-                    lossp = lp * lossp * LOSS1.avg / LOSSP.avg / float(len(targnames))
-                    LOSSP.update(lossp.data[0])
-#                    lossp = lossp/float(len(targnames))
-                    lossp.backward(retain_variables=True)
-                    if j > 0:
-                        h = Variable(h.data)
                 else:
                     raise(RuntimeError("Train_style {} not recognized.".format(train_style)))
-                loss1 = criterion(out, target_var)
+                loss1 = criterion(out, target_var, deviceids=deviceids)
+#                lossp = criterion2(outparam, target_p)
+#                lossp = lossp * 448
+#                print "Lossp: ({})".format(lossp.data[0])
                 LOSS1.update(loss1.data[0])
-                if train_style == 'rnn' or train_style == 'rnnDual':
-                    loss1 = l1 * loss1 / float(len(targnames)) # average  sequence
-                elif train_style == 'iid':
-                    loss1 = l1 * loss1 / float(accum_batch)
-                # compute gradient
-                losses.update(loss1.data[0], input.size(0))
+                if train_style == 'kalman': 
+                    loss1 = l1 * loss1 / float(accum_batch)# average  sequence
+                    print 'expanded {}'.format(loss1.data[0])
+                    accum+=1
+                losses.update(loss1.data[0]) #, input.size(0))
                 loss1.backward(retain_variables=True)
+#                lossp.backward(retain_variables=True)
                 count = count + 1
                 # Calculate average over window (Approximation)
                 if count % calc_freq == 0:
-                    iou, prec, rec = jaccard(out, target_var)
-                    IOUROAD.update(iou)
-                    IOU = IOU + iou
-                    PREC = PREC + prec
-                    REC = REC + rec
-                    if save_training: # and epoch > 0: #Let it get through an epoch first.
+                    iou, prec, rec, inters, union= jaccard(out, target_var)
+                    I.update(inters)
+                    U.update(union)
+
+#                    print "Jaccard IOU: {}".format(iou)
+                    if iou[1] >=0:
+                        IOUROAD.update(iou)
+                        IOU.update(iou)
+                        PREC.update(prec)
+                        REC.update(prec)
+                    if save_training and epoch > min_save: # and epoch > 0: #Let it get through an epoch first.
                         imname=img[0].split('/')[-1][:-4] #Get name
-                        if iou[1] > 0.99:
-                            print "{} > 0.99, saving".format(iou[1])
-                            saveoutput(input, out, target_var, count, savename='GOOD')
-                        if iou[1] < 0.85:
-                            print "{} < 0.8, saving".format(iou[1])
-                            saveoutput(input, out, target_var, epoch, savename=imname, q='AWFUL')
+                        imname = imname.replace("splitFlag_", "")
+                        if len(imname) > 50:
+                            head = imname[:30]
+                            imname = head + imname[-20:]
+                        imname = imname + "_" + str(iou[1]) + '_'
+                        if iou[1] > 0.9:
+                            print "{} > 0.90, saving\t({})".format(iou[1], loss1.data[0])
+                            saveoutput(input, out, target_var, epoch, savename=imname, q='TRAIN_GOOD')
+                        if iou[1] < 0.7:
+                            print "{} < 0.90, saving\t({})".format(iou[1], loss1.data[0])
+                            saveoutput(input, out, target_var, epoch, savename=imname, q='TRAIN_AWFUL')
 
 
                 if count % print_freq == 0:
@@ -305,28 +286,21 @@ def train(train_loader, model, criterion, criterion2, optimizer, train_style, ep
                     print('Forward time:\t{}').format(forward_time.avg)
 #                        iou, prec, rec = jaccard(out, target_var)
                     print('Average road IOU overall:\t{}').format(IOUROAD.avg)
+                    print('New Calc Style:\t{}'.format(I.sum/U.sum))
+                    print('Proportion: {}'.format(U.sum[0]/U.sum[1])
                     print('AVG Training Stats for round {}:\n\tIOU:'
                            '\t{}\n\tPREC:\t{}\n\tREC:\t{}'.format(count, 
-                           IOU / (float(print_freq)/calc_freq), PREC/(float(print_freq)/calc_freq), REC/(float(print_freq)/calc_freq)))
+                           IOU.avg, PREC.avg, REC.avg))
                     print('Out layer stats:\n\tMax:\t{}\n\tMin:\t{}'
                            '\n\tMean:\t{}\n\tStd:\t{}'.format(out.max().data[0],
                            out.min().data[0], out.mean().data[0], out.std().data[0]))
-                    if train_style == 'rnndual':
-                        print('Loss1:\t{}\nLoss2:\t{}\nLoss3:\t{}\nLossp:\t{}').format(
-                               loss1, loss2, loss3, lossp) 
-                        print("Losses:\n\tLossp: {}\n\tLoss3: {}\n\tLoss2A: {}"
-                              "\n\tLoss2B: {}\n\tLoss1: {}").format(LOSSP.avg, LOSS3.avg, 
-                                      LOSS2A.avg, LOSS2B.avg, LOSS1.avg)
-                    #print('Current alpha size: {}').format(alpha)
-                    IOU = IOU * 0.0 #Restart for next window
-                    PREC = PREC * 0.0
-                    REC = REC * 0.0
 
                 if gradient_clip > 0: #Should I clip for all steps?
                     nn.utils.clip_grad_norm(model.parameters(), gradient_clip)
             
             # Update parameters after sequence
-            if train_style == 'rnn' or train_style == 'rnnDual'or (train_style == 'iid' and (batch_size*accum) >= accum_batch):
+            if (train_style == 'kalman' or train_style == 'iid') and ((batch_size*accum) >= accum_batch):
+                #print "Loss: {}".format(losses.avg*accum)
                 optimizer.step()
                 optimizer.zero_grad()
                 batch_time.update(time.time() - end)
@@ -344,18 +318,21 @@ def validate(val_loader, model, criterion, train_style, epoch, num_labels=2):
     jac = AverageMeter()
     IOUROAD = AverageMeter()
     IOU = np.zeros(num_labels, dtype=np.float32)
+    I = AverageMeter()
+    U = AverageMeter()
     REC = np.zeros(num_labels, dtype=np.float32)
     PREC = np.zeros(num_labels, dtype=np.float32)
     model.eval()
     end = time.time()
     count = np.zeros(num_labels, dtype=np.int)
     
+    #for i, (imgnames, targnames) in enumerate(val_loader):
     for i, (imgnames, targnames, scale, hval, wval, reflect) in enumerate(val_loader):
-#        print "YAYAYAYAY"
         h = None
-        if train_style == 'rnn' or train_style == 'rnnDual':
+        if train_style == 'kalman' or train_style == 'rnnDual':
             h = model.module.init_hidden().cuda(deviceids[0], async=True)
         for (img, target, j) in zip(imgnames, targnames, range(len(targnames))): 
+            #input, target, targetp = val_loader.dataset.preprocessImage(img, target, 0)
             input, target, targetp = val_loader.dataset.preprocessImage(img, target, 0, (scale, hval, wval, reflect))
             input = input.expand(1, 1, dims, dims).contiguous()
             input = input.cuda(deviceids[0], async=True)
@@ -366,39 +343,38 @@ def validate(val_loader, model, criterion, train_style, epoch, num_labels=2):
             target_p = Variable(targetp, volatile=True)
             
             outp = None
-            if train_style == 'iid':
-                outp = model(input_var)
-#                printStats(outp)
-            elif train_style == 'rnn' or train_style == 'rnnDual':
-                outp, h = model(input_var, h, j)
-                #h = Variable(h.data) #Again. sketchy since not actually BPTT
-           # elif train_style == 'rnnDual':
-           #     outp, h = model(input_var, h, j)
-           #     h = Variable(h.data) #Again. sketchy since not actually BPTT
+            if train_style == 'kalman':
+                #outp, h, outparam = model(input_var, h, j)
+                outp, h= model(input_var, h, j)
 
             else:
                 print "Training style undefined"
                 exit()
             loss = criterion(outp, target_var)
-            iou, prec, rec = jaccard(outp, target_var)
-            IOUROAD.update(iou)
-            for j in range(num_labels):
-                if iou[j] >=0:
-                    IOU[j] = IOU[j] + iou[j]
-                    count[j] = count[j] + 1
+#            lossp = criterion2(outparam, targetp)
+            iou, prec, rec, inters, union= jaccard(outp, target_var)
+            I.update(inters)
+            U.update(union)
+            if iou[1] >=0:
+                IOUROAD.update(iou)
+            for k in range(num_labels):
+                if iou[k] >=0:
+                    IOU[k] = IOU[k] + iou[k]
+                    count[k] = count[k] + 1
             PREC = PREC + prec
             REC = REC + rec
-            if save_validation:
+            if save_validation and epoch > min_save:
                 imname=img[0].split('/')[-1][:-4] #Get name
+                imname = imname.replace("splitFlag_", "")
                 if len(imname) > 30:
                     head = imname[:30]
                     imname = head + imname[-10:]
                 imname = imname + "_" + str(iou[1]) + '_'
-                if iou[1] > 0.99:
-                    print "{} > 0.99, saving".format(iou[1])
+                if iou[1] > 0.95:
+                    print "{} > 0.95, saving".format(iou[1])
                     saveoutput(input.cpu(), outp, target_var, epoch, savename=imname, q='VALGOOD')
-                elif iou[1] < 0.9:
-                    print "{} < 0.9, saving error".format(iou[1])
+                elif iou[1] < 0.8:
+                    print "{} < 0.8, saving error".format(iou[1])
                     saveoutput(input.cpu(), outp, target_var, epoch, savename=imname, q='VALAWFUL')
                 else:
                     saveoutput(input.cpu(), outp, target_var, epoch, savename=imname, q='VALOK')
@@ -408,15 +384,17 @@ def validate(val_loader, model, criterion, train_style, epoch, num_labels=2):
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
-            if i % print_freq == 0:
+            if j % print_freq == 0:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
                        i, len(val_loader), batch_time=batch_time, loss=losses))
                 print('Average road IOU overall:\t{}').format(IOUROAD.avg)
+                print('New Calc Style:\t{}'.format(I.sum/U.sum))
 
     print 'Count:\t{}'.format(count)
-    return losses.avg, IOU/count, PREC/count, REC/count
+    print "IOUROAD: {}".format(IOUROAD.avg)
+    return losses.avg, I.sum/U.sum, PREC/count, REC/count #IOU/count, PREC/count, REC/count
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -472,6 +450,7 @@ def saveoutput(im, pred, targ, index, savename = '', q='AWFUL'):
     global dims
     root = '/data/hinthorn/workspace_hinthorn/exp/pytorch'
     savename = os.path.join(root, 'imgs',modelname +'_'+ savename+'_epoch_'+ str(index)+'_'+q + '.png')
+#    print "Saving: {}".format(savename)
     pred = pred.data.cpu().squeeze().numpy()
     target = targ.data.cpu().squeeze().numpy()
     im = im.squeeze().numpy()
@@ -496,36 +475,38 @@ def saveoutput(im, pred, targ, index, savename = '', q='AWFUL'):
 
 
 def adjust_learning_rate(optimizer, epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    """Sets the learning rate to the initial LR decayed by 10 every 20 epochs"""
     lr = base_lr * (0.9 ** (epoch // 1))
     #log_value('learning_rate', lr, epoch)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-def jaccard(output, label, num_labels=2):
+def jaccard(output, label,num_labels=2):
     output = output.data
     label = label.data
     values, predictmap = output.max(1)
     predictmap = predictmap.cpu().byte().squeeze().numpy()
     lab = label.cpu().byte().squeeze().numpy()
     IOU = np.zeros(num_labels, dtype=np.float32)
+    I = np.zeros(num_labels, dtype=np.float32)
+    U = np.zeros(num_labels, dtype=np.float32)
     REC = np.zeros(num_labels, dtype=np.float32)
     PREC = np.zeros(num_labels, dtype=np.float32)
     smoothing_const = 0.000001
     for j in range(num_labels):
-        I = np.float64(np.sum(np.logical_and((predictmap == j),(lab == j))))
-        U = np.float64(np.sum(np.logical_or(np.logical_and(predictmap == j, lab != 255), lab == j)))
-        PREC[j] = (I+smoothing_const)/(np.sum(predictmap == j)+smoothing_const)
-        REC[j] = (I+smoothing_const)/(np.sum(lab == j)+smoothing_const) 
+        I[j] = np.float64(np.sum(np.logical_and((predictmap == j),(lab == j))))
+        U[j] = np.float64(np.sum(np.logical_or(np.logical_and(predictmap == j, lab != 255), lab == j)))
+        PREC[j] = (I[j]+smoothing_const)/(np.sum(predictmap == j)+smoothing_const)
+        REC[j] = (I[j]+smoothing_const)/(np.sum(lab == j)+smoothing_const) 
 
         #ignore appropriate pixels
-        if U == 0: 
+        if U[j] == 0: 
 #                I[j] = 1
 #                U[j] = 1
             IOU[j] = -1
         else:
-            IOU[j] =I/U 
-    return IOU, PREC, REC    
+            IOU[j] =I[j]/U[j] 
+    return IOU, PREC, REC, I, U    
 
 
 
